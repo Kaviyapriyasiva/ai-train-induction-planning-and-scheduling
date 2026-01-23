@@ -3,6 +3,12 @@ import pandas as pd
 import numpy as np
 import joblib
 import matplotlib.pyplot as plt
+import os
+import google.generativeai as genai
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+llm = genai.GenerativeModel("gemini-2.5-flash")
+
 
 model = joblib.load("./model/demand_forecast_model.pkl")
 features = joblib.load("./model/model_features.pkl")
@@ -17,6 +23,7 @@ except:
 TRAIN_CAPACITY = 1000
 MIN_TRAINS = 2
 MAX_TRAINS = 10
+
 
 STATIONS = [
     "Aluva", "Pulinchodu", "Companypady", "Ambattukavu",
@@ -47,6 +54,36 @@ def rl_train_induction(predicted_demand, is_peak):
     best_action = actions[np.argmax(q_values)]
     return best_action
 
+def generate_llm_explanation(
+    predicted_demand,
+    recommended_trains,
+    energy_eff,
+    comfort,
+    is_peak,
+    action
+):
+    prompt = f"""
+You are an assistant supporting metro rail operations.
+
+Context:
+- Predicted passenger demand per hour: {predicted_demand}
+- Number of trains recommended: {recommended_trains}
+- Energy efficiency score: {energy_eff}%
+- Passenger comfort index: {comfort}/100
+- Peak hour status: {"Yes" if is_peak else "No"}
+- Operational action taken: {action}
+
+Instructions:
+- Explain WHY this decision was made.
+- Mention trade-offs between waiting time, comfort, and energy usage.
+- Use simple professional language.
+- Do NOT mention AI, machine learning, or algorithms.
+- Limit to 3 sentences.
+"""
+
+    response = llm.generate_content(prompt)
+    return response.text.strip()
+
 st.set_page_config(
     page_title="KMRL AI Operations Dashboard",
     layout="wide"
@@ -67,6 +104,9 @@ with st.container():
 is_weekend = 1 if day_type == "Weekend" else 0
 is_peak = 1 if (8 <= hour <= 10 or 17 <= hour <= 20) else 0
 
+predicted_demand = 0
+recommended_trains = 0
+confidence = 0
 predicted_demand = 0
 recommended_trains = 0
 confidence = 0
@@ -106,6 +146,30 @@ with left:
         train_icon = "🚆" if i == (hour % len(STATIONS)) else "➖"
         st.markdown(f"{color} **{station}** {train_icon}")
 
+with right:
+    st.subheader("📊 Key Performance Indicators")
+
+    if run_ai:
+        avg_wait = max(2, 12 - recommended_trains)
+        load_pct = int((predicted_demand / max(1, recommended_trains * TRAIN_CAPACITY)) * 100)
+
+        energy_eff = max(60, 100 - recommended_trains * 4)
+        comfort = max(50, 100 - load_pct)
+        xai_energy_eff = energy_eff
+        xai_comfort = comfort
+
+
+        st.metric("⏱ Avg Waiting Time (min)", avg_wait)
+        st.metric("👥 Passenger Load %", f"{load_pct}%")
+        st.metric("⚡ Energy Efficiency", f"{energy_eff}%")
+        st.metric("🙂 Comfort Index", f"{comfort}%")
+    else:
+        st.metric("⏱ Avg Waiting Time", "-")
+        st.metric("👥 Passenger Load %", "-")
+        st.metric("⚡ Energy Efficiency", "-")
+        st.metric("🙂 Comfort Index", "-")
+
+
 with center:
     st.subheader("🤖 AI Recommendation")
 
@@ -126,30 +190,23 @@ with center:
         c1, c2 = st.columns(2)
         c1.button("✅ Accept Plan")
         c2.button("🔁 Recalculate")
+        st.markdown("### 🧠 Explainable Decision")
+
+        explanation = generate_llm_explanation(
+            predicted_demand=predicted_demand,
+            recommended_trains=recommended_trains,
+            energy_eff=xai_energy_eff,
+            comfort=xai_comfort,
+            is_peak=is_peak,
+            action="Train frequency adjustment"
+        )
+
+        st.info(explanation)
+
     else:
         st.info("Run AI to generate recommendations")
 
-with right:
-    st.subheader("📊 Key Performance Indicators")
 
-    if run_ai:
-        avg_wait = max(2, 12 - recommended_trains)
-        load_pct = min(
-            100,
-            int((predicted_demand / (recommended_trains * TRAIN_CAPACITY)) * 100)
-        )
-        energy_eff = max(60, 100 - recommended_trains * 4)
-        comfort = max(50, 100 - load_pct)
-
-        st.metric("⏱ Avg Waiting Time (min)", avg_wait)
-        st.metric("👥 Passenger Load %", f"{load_pct}%")
-        st.metric("⚡ Energy Efficiency", f"{energy_eff}%")
-        st.metric("🙂 Comfort Index", f"{comfort}%")
-    else:
-        st.metric("⏱ Avg Waiting Time", "-")
-        st.metric("👥 Passenger Load %", "-")
-        st.metric("⚡ Energy Efficiency", "-")
-        st.metric("🙂 Comfort Index", "-")
 
 st.subheader("📈 Passenger Demand Trend")
 
