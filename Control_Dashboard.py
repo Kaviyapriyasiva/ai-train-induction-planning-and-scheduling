@@ -3,6 +3,12 @@ import pandas as pd
 import numpy as np
 import joblib
 import matplotlib.pyplot as plt
+import os
+import google.generativeai as genai
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+llm = genai.GenerativeModel("gemini-2.5-flash")
+
 
 model = joblib.load("./model/demand_forecast_model.pkl")
 features = joblib.load("./model/model_features.pkl")
@@ -46,6 +52,36 @@ def rl_train_induction(predicted_demand, is_peak):
 
     best_action = actions[np.argmax(q_values)]
     return best_action
+
+def generate_llm_explanation(
+    predicted_demand,
+    recommended_trains,
+    energy_eff,
+    comfort,
+    is_peak,
+    action
+):
+    prompt = f"""
+You are an assistant supporting metro rail operations.
+
+Context:
+- Predicted passenger demand per hour: {predicted_demand}
+- Number of trains recommended: {recommended_trains}
+- Energy efficiency score: {energy_eff}%
+- Passenger comfort index: {comfort}/100
+- Peak hour status: {"Yes" if is_peak else "No"}
+- Operational action taken: {action}
+
+Instructions:
+- Explain WHY this decision was made.
+- Mention trade-offs between waiting time, comfort, and energy usage.
+- Use simple professional language.
+- Do NOT mention AI, machine learning, or algorithms.
+- Limit to 3 sentences.
+"""
+
+    response = llm.generate_content(prompt)
+    return response.text.strip()
 
 st.set_page_config(
     page_title="KMRL AI Operations Dashboard",
@@ -106,29 +142,6 @@ with left:
         train_icon = "🚆" if i == (hour % len(STATIONS)) else "➖"
         st.markdown(f"{color} **{station}** {train_icon}")
 
-with center:
-    st.subheader("🤖 AI Recommendation")
-
-    if run_ai:
-        st.markdown(
-            f"""
-            ### 🚆 Recommended Trains: **{recommended_trains}**
-            **Route Direction:** {"Aluva → Ernakulam" if direction_id == 0 else "Ernakulam → Aluva"}  
-            **AI Confidence:** {confidence}%  
-
-            **Explanation:**  
-            Reinforcement Learning agent evaluated congestion risk,
-            passenger comfort, and energy efficiency using
-            **predicted demand = {predicted_demand} passengers**.
-            """
-        )
-
-        c1, c2 = st.columns(2)
-        c1.button("✅ Accept Plan")
-        c2.button("🔁 Recalculate")
-    else:
-        st.info("Run AI to generate recommendations")
-
 with right:
     st.subheader("📊 Key Performance Indicators")
 
@@ -150,6 +163,46 @@ with right:
         st.metric("👥 Passenger Load %", "-")
         st.metric("⚡ Energy Efficiency", "-")
         st.metric("🙂 Comfort Index", "-")
+xai_energy_eff = energy_eff
+xai_comfort = comfort
+
+with center:
+    st.subheader("🤖 AI Recommendation")
+
+    if run_ai:
+        st.markdown(
+            f"""
+            ### 🚆 Recommended Trains: **{recommended_trains}**
+            **Route Direction:** {"Aluva → Ernakulam" if direction_id == 0 else "Ernakulam → Aluva"}  
+            **AI Confidence:** {confidence}%  
+
+            **Explanation:**  
+            Reinforcement Learning agent evaluated congestion risk,
+            passenger comfort, and energy efficiency using
+            **predicted demand = {predicted_demand} passengers**.
+            """
+        )
+
+        c1, c2 = st.columns(2)
+        c1.button("✅ Accept Plan")
+        c2.button("🔁 Recalculate")
+        st.markdown("### 🧠 Explainable Decision")
+
+        explanation = generate_llm_explanation(
+            predicted_demand=predicted_demand,
+            recommended_trains=recommended_trains,
+            energy_eff=xai_energy_eff,
+            comfort=xai_comfort,
+            is_peak=is_peak,
+            action="Train frequency adjustment"
+        )
+
+        st.info(explanation)
+
+    else:
+        st.info("Run AI to generate recommendations")
+
+
 
 st.subheader("📈 Passenger Demand Trend")
 
