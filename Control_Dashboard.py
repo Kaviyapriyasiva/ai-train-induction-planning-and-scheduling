@@ -24,6 +24,7 @@ TRAIN_CAPACITY = 1000
 MIN_TRAINS = 2
 MAX_TRAINS = 10
 
+
 STATIONS = [
     "Aluva", "Pulinchodu", "Companypady", "Ambattukavu",
     "Muttom", "Kalamassery", "CUSAT", "Edappally",
@@ -106,6 +107,9 @@ is_peak = 1 if (8 <= hour <= 10 or 17 <= hour <= 20) else 0
 predicted_demand = 0
 recommended_trains = 0
 confidence = 0
+predicted_demand = 0
+recommended_trains = 0
+confidence = 0
 
 if run_ai:
     input_df = pd.DataFrame([{
@@ -147,12 +151,13 @@ with right:
 
     if run_ai:
         avg_wait = max(2, 12 - recommended_trains)
-        load_pct = min(
-            100,
-            int((predicted_demand / (recommended_trains * TRAIN_CAPACITY)) * 100)
-        )
+        load_pct = int((predicted_demand / max(1, recommended_trains * TRAIN_CAPACITY)) * 100)
+
         energy_eff = max(60, 100 - recommended_trains * 4)
         comfort = max(50, 100 - load_pct)
+        xai_energy_eff = energy_eff
+        xai_comfort = comfort
+
 
         st.metric("⏱ Avg Waiting Time (min)", avg_wait)
         st.metric("👥 Passenger Load %", f"{load_pct}%")
@@ -163,8 +168,7 @@ with right:
         st.metric("👥 Passenger Load %", "-")
         st.metric("⚡ Energy Efficiency", "-")
         st.metric("🙂 Comfort Index", "-")
-xai_energy_eff = energy_eff
-xai_comfort = comfort
+
 
 with center:
     st.subheader("🤖 AI Recommendation")
