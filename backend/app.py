@@ -1,8 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.stations_api import router as stations_router
 from dotenv import load_dotenv
 import os
+import sys
+
+# Add backend directory to path for imports
+sys.path.insert(0, os.path.dirname(__file__))
 
 # -------------------------------------------------
 # Load environment variables (.env)
@@ -12,6 +15,7 @@ load_dotenv()
 # -------------------------------------------------
 # Import routers
 # -------------------------------------------------
+from api.stations_api import router as stations_router
 from api.demand_api import router as demand_router
 from api.induction_api import router as induction_router
 
