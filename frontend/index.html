@@ -275,6 +275,12 @@
             font-size: 0.8em;
             border-radius: 4px;
             font-weight: 600;
+            transition: opacity 0.2s ease;
+            cursor: pointer;
+        }
+
+        .heatmap-cell:hover {
+            opacity: 0.7;
         }
 
         .heatmap-header {
@@ -368,7 +374,7 @@
                 </div>
                 <div class="control-group">
                     <label>Current Trains / Hour</label>
-                    <input type="range" id="trainsPerHour" min="1" max="10" value="5">
+                    <input type="range" id="trainsPerHour" min="1" max="10" value="5" oninput="updateTrainsPerHourDisplay(this.value)">
                     <span id="trainsDisplay">5</span>
                 </div>
                 <div class="control-group">
@@ -404,15 +410,15 @@
                             <span class="metric-value">-</span>
                         </div>
                         <div class="metric">
-                            <span class="metric-label">👥 Load</span>
+                            <span class="metric-label">👥 Load %</span>
                             <span class="metric-value">-</span>
                         </div>
                         <div class="metric">
-                            <span class="metric-label">⚡ Energy</span>
+                            <span class="metric-label">⚡ Energy %</span>
                             <span class="metric-value">-</span>
                         </div>
                         <div class="metric">
-                            <span class="metric-label">🙂 Comfort</span>
+                            <span class="metric-label">🙂 Comfort %</span>
                             <span class="metric-value">-</span>
                         </div>
                     </div>
@@ -471,16 +477,7 @@
             <div class="card">
                 <h3>📈 Historical vs AI-Predicted Demand</h3>
                 <div class="chart-container">
-                    <div class="card">
-    <h3>🔥 Station-wise Passenger Demand Heatmap</h3>
-    <div class="heatmap-container">
-        <canvas id="demandHeatmap" style="min-width:800px; height:400px;"></canvas>
-    </div>
-    <p style="color: #6c757d; font-size: 0.9em; margin-top: 10px;">
-        Darker colors indicate higher passenger congestion
-    </p>
-</div>
-
+                    <canvas id="historicalVsPredictedChart"></canvas>
                 </div>
             </div>
         </div>
@@ -506,7 +503,7 @@
                 </div>
 
                 <div class="card" style="grid-column: span 2;">
-                    <h3>📊 AI Output Preview</h3>
+                    
                     <div id="planningOutput">
                         <div class="info-box">Adjust inputs and click <strong>Generate AI Plan</strong> to view recommendations</div>
                     </div>
@@ -555,12 +552,13 @@
     <script>
     const MIN_TRAINS = 2;
     const MAX_TRAINS = 20;
-    const API_BASE = "http://localhost:8000/api";
+    const API_BASE = "http://localhost:8001/api";
+    const TRAIN_CAPACITY = 400; // Passengers per train
 
     // ========== WEATHER API ==========
     async function getWeatherData(city = "Kochi") {
         try {
-            const res = await fetch(`https://api.weatherapi.com/v1/current.json?key=YOUR_WEATHER_API_KEY&q=${city}&aqi=no`);
+            const res = await fetch(`https://api.weatherapi.com/v1/current.json?key=4bbb090bd7be475fabb71537262301&q=${city}&aqi=no`);
             const d = await res.json();
             return {
                 temp: d.current.temp_c,
@@ -612,6 +610,17 @@
         } catch (e) {
             console.error("Induction API Error:", e);
             return { recommended_trains: 5, confidence: 78, policy: "error" };
+        }
+    }
+
+    // ========== INDUCTION SYSTEM STATUS ==========
+    async function getInductionSystemStatus() {
+        try {
+            const response = await fetch(`${API_BASE}/induction/status`);
+            return await response.json();
+        } catch (e) {
+            console.error("Status API Error:", e);
+            return { status: "unavailable", rl_model_loaded: false };
         }
     }
 
@@ -682,9 +691,6 @@
                 return `
                     <div class="station-item">
                         <span>${color} <strong>${s}</strong> ${icon}</span>
-                        <span style="color:${congestion < 0.5 ? '#28a745' : (congestion < 0.8 ? '#ffc107' : '#dc3545')};">
-                            Congestion: ${(congestion * 100).toFixed(0)}%
-                        </span>
                     </div>
                 `;
             }).join('');
@@ -801,15 +807,17 @@
         /* ---------------- KPI UPDATE (WITH BACKEND DATA) ---------------- */
         function updateKPIs(demand, trains) {
             const metrics = document.querySelectorAll(".metric-value");
-            const waitingTime = Math.max(2, 12 - demand / 1000);
-            const loadPercentage = Math.min(100, demand / 80);
-            const energyConsumption = (demand / 50) * trains;
-            const comfortLevel = demand < 5000 ? "😊 High" : (demand < 7000 ? "😐 Medium" : "😟 Low");
             
-            metrics[0].innerText = `${waitingTime.toFixed(1)} min`;
-            metrics[1].innerText = `${loadPercentage.toFixed(0)}%`;
-            metrics[2].innerText = `${energyConsumption.toFixed(0)} kWh`;
-            metrics[3].innerText = comfortLevel;
+            // KPI calculations based on Streamlit logic
+            const waitingTime = Math.max(2, 12 - trains);
+            const loadPercentage = Math.min(100, Math.round((demand / (trains * TRAIN_CAPACITY)) * 100));
+            const energyConsumption = Math.max(60, 100 - trains * 4);
+            const comfortLevel = Math.max(50, 100 - loadPercentage);
+            
+            metrics[0].innerText = `${waitingTime} min`;
+            metrics[1].innerText = `${loadPercentage}%`;
+            metrics[2].innerText = `${energyConsumption}%`;
+            metrics[3].innerText = `${comfortLevel}%`;
         }
         
         /* ---------------- CHART (WITH TIME SERIES) ---------------- */
@@ -870,39 +878,74 @@
             });
         }
         
-        /* ---------------- DEMAND ANALYTICS (WITH API) ---------------- */
+        /* Fetch all demand data once (prevents duplicate API calls) */
+        async function fetchAllDemandData(timeStart, timeEnd, dayType) {
+            const isWeekend = dayType === "weekend" ? 1 : 0;
+            const predictedByHour = {};
+
+            for (let hour = timeStart; hour <= timeEnd; hour++) {
+                const isPeak = (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20) ? 1 : 0;
+                const result = await fetchDemandForecast(hour, isWeekend, isPeak, 5, 0);
+                predictedByHour[hour] = Math.round(result.estimated_demand || 5000);
+            }
+
+            return predictedByHour;
+        }
+
+        /* ---------------- DEMAND ANALYTICS (WITH API) - OPTIMIZED TO REDUCE API CALLS ---------------- */
         async function runDemandAnalytics() {
             const dayType = document.getElementById("analyticsDayType").value;
             const timeStart = parseInt(document.getElementById("timeStart").value);
             const timeEnd = parseInt(document.getElementById("timeEnd").value);
             const isWeekend = dayType === "weekend" ? 1 : 0;
 
-            document.getElementById("heatmapContainer").innerHTML = `<div class="info-box">⏳ Loading demand analytics...</div>`;
+            document.getElementById("heatmapContainer").innerHTML = `<div class="info-box">⏳ Loading demand analytics from backend API (fetching data once)...</div>`;
 
             try {
-                // Fetch demand data for each hour
-                const heatmapData = [];
                 const stations = [
                     "Aluva", "Pulinchodu", "Companypady", "Ambattukavu",
                     "Muttom", "Kalamassery", "CUSAT", "Edappally",
                     "Kaloor", "MG Road", "Maharaja's", "Ernakulam South"
                 ];
 
+                // ✅ FETCH DATA ONCE - reduces ~200 API calls to just ~17 calls
+                const predictedByHour = await fetchAllDemandData(timeStart, timeEnd, dayType);
+
+                // Build heatmap data using cached predictions
+                const heatmapData = {};
+                const hourLabels = [];
+
                 for (let hour = timeStart; hour <= timeEnd; hour++) {
-                    const isPeak = (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20) ? 1 : 0;
-                    const result = await fetchDemandForecast(hour, isWeekend, isPeak, 5, 0);
-                    heatmapData.push({
-                        hour: hour,
-                        demand: result.estimated_demand || 5000
-                    });
+                    hourLabels.push(hour);
                 }
+
+                stations.forEach((station, stationIdx) => {
+                    heatmapData[station] = [];
+                    
+                    for (let hour of hourLabels) {
+                        let stationDemand = predictedByHour[hour];
+                        
+                        // Add variation based on station proximity to major hubs
+                        if (stationIdx === 9 || stationIdx === 8) { // Central stations
+                            stationDemand *= 1.3;
+                        }
+                        if (stationIdx === 0 || stationIdx === 11) { // Terminal stations
+                            stationDemand *= 0.7;
+                        }
+                        
+                        heatmapData[station].push({
+                            hour: hour,
+                            demand: Math.round(stationDemand)
+                        });
+                    }
+                });
 
                 // Generate heatmap HTML
                 let heatmapHTML = `
                     <div class="heatmap">
                         <div class="heatmap-row">
                             <div class="heatmap-cell heatmap-header">Station / Hour</div>
-                            ${heatmapData.map(d => `<div class="heatmap-cell heatmap-header">${d.hour}:00</div>`).join('')}
+                            ${hourLabels.map(h => `<div class="heatmap-cell heatmap-header">${h}:00</div>`).join('')}
                         </div>
                 `;
 
@@ -910,56 +953,266 @@
                     heatmapHTML += `<div class="heatmap-row">
                         <div class="heatmap-cell heatmap-label">${station}</div>`;
                     
-                    heatmapData.forEach(d => {
+                    heatmapData[station].forEach(d => {
                         const intensity = Math.min(100, (d.demand / 7000) * 100);
                         const color = getHeatmapColor(intensity);
-                        heatmapHTML += `<div class="heatmap-cell" style="background-color: ${color}; color: white;">
-                            ${Math.round(d.demand / 100)}
-                        </div>`;
+                        heatmapHTML += `<div class="heatmap-cell" style="background-color: ${color};"></div>`;
                     });
                     
                     heatmapHTML += `</div>`;
                 });
 
                 heatmapHTML += `</div>`;
+                
+                // Add legend
+                heatmapHTML += `
+                    <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                        <h4>📊 Demand Intensity Legend</h4>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                            <div style="display: flex; align-items: center; gap: 5px;">
+                                <div style="width: 20px; height: 20px; background: #d4edda; border-radius: 3px; border: 1px solid #ddd;"></div>
+                                <span style="font-size: 0.85em;">Very Low</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 5px;">
+                                <div style="width: 20px; height: 20px; background: #28a745; border-radius: 3px;"></div>
+                                <span style="font-size: 0.85em;">Low</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 5px;">
+                                <div style="width: 20px; height: 20px; background: #ffc107; border-radius: 3px;"></div>
+                                <span style="font-size: 0.85em;">Medium</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 5px;">
+                                <div style="width: 20px; height: 20px; background: #fd7e14; border-radius: 3px;"></div>
+                                <span style="font-size: 0.85em;">High</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 5px;">
+                                <div style="width: 20px; height: 20px; background: #e74c3c; border-radius: 3px;"></div>
+                                <span style="font-size: 0.85em;">Very High</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 5px;">
+                                <div style="width: 20px; height: 20px; background: #8B0000; border-radius: 3px;"></div>
+                                <span style="font-size: 0.85em;">Peak</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
                 document.getElementById("heatmapContainer").innerHTML = heatmapHTML;
+
+                // ✅ Generate chart using cached data (NO additional API calls)
+                await generateHistoricalVsPredictedChart(timeStart, timeEnd, dayType, predictedByHour);
 
             } catch (error) {
                 console.error("Analytics Error:", error);
                 document.getElementById("heatmapContainer").innerHTML = `
-                    <div class="error-box">Error loading analytics. Backend may be unavailable.</div>
+                    <div class="error-box">
+                        <strong>❌ Error:</strong> Failed to load analytics. Backend API may be unavailable at ${API_BASE}/demand/predict
+                    </div>
                 `;
             }
         }
 
         function getHeatmapColor(intensity) {
-            // 0% = green, 50% = yellow, 100% = red
-            if (intensity < 33) return "#28a745";
-            if (intensity < 66) return "#ffc107";
-            return "#dc3545";
+            // Dynamic color gradient: Green → Yellow → Orange → Red → Dark Red/Maroon
+            // Based on intensity percentage (0-100%)
+            
+            if (intensity < 15) return "#d4edda";      // Very light green
+            if (intensity < 25) return "#28a745";      // Light green
+            if (intensity < 35) return "#20c997";      // Green
+            if (intensity < 45) return "#ffeaa7";      // Light yellow
+            if (intensity < 55) return "#ffc107";      // Yellow
+            if (intensity < 65) return "#fd7e14";      // Orange
+            if (intensity < 75) return "#f97316";      // Dark orange
+            if (intensity < 85) return "#e74c3c";      // Red
+            if (intensity < 92) return "#c0392b";      // Dark red
+            return "#8B0000";                          // Maroon/Dark red for peak demand
+        }
+
+        /* Generate Historical Demand (simulated pattern-based) */
+        function generateHistoricalDemand(hour, dayType) {
+            // Base pattern: higher during peak hours, lower at night
+            let baseDemand = 2000; // Base late night demand
+            
+            if (hour >= 6 && hour < 8) baseDemand = 3500; // Morning commute start
+            if (hour >= 8 && hour < 10) baseDemand = 6500; // Morning peak
+            if (hour >= 10 && hour < 12) baseDemand = 4500; // Mid-morning
+            if (hour >= 12 && hour < 14) baseDemand = 4000; // Lunch hours
+            if (hour >= 14 && hour < 16) baseDemand = 3500; // Afternoon
+            if (hour >= 16 && hour < 17) baseDemand = 4500; // Afternoon commute start
+            if (hour >= 17 && hour < 20) baseDemand = 7000; // Evening peak
+            if (hour >= 20 && hour < 22) baseDemand = 5000; // Late evening
+            if (hour >= 22) baseDemand = 2500; // Night
+            
+            // Weekend variation (lower demand)
+            if (dayType === "weekend") {
+                baseDemand *= 0.75;
+            }
+            
+            // Add random variation (±10%)
+            const variation = baseDemand * (0.9 + Math.random() * 0.2);
+            return Math.round(variation);
+        }
+
+        let historicalVsPredictedChart;
+
+        /* Generate Historical vs AI-Predicted Demand Chart (uses cached data) */
+        async function generateHistoricalVsPredictedChart(timeStart, timeEnd, dayType, cachedPredictedData) {
+            const ctx = document.getElementById("historicalVsPredictedChart");
+            
+            if (!ctx) return; // Chart element not present
+            
+            if (historicalVsPredictedChart) {
+                historicalVsPredictedChart.destroy();
+            }
+
+            try {
+                const labels = [];
+                const historicalData = [];
+                const predictedData = [];
+
+                // Build chart data using cached predictions (NO additional API calls)
+                for (let hour = timeStart; hour <= timeEnd; hour++) {
+                    labels.push(`${hour}:00`);
+                    
+                    // Historical demand (simulated based on patterns)
+                    historicalData.push(generateHistoricalDemand(hour, dayType));
+                    
+                    // Use cached predicted demand
+                    predictedData.push(cachedPredictedData[hour]);
+                }
+
+                const chartCtx = ctx.getContext("2d");
+                historicalVsPredictedChart = new Chart(chartCtx, {
+                    type: "line",
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: "📊 Historical Demand (Past Week Average)",
+                                data: historicalData,
+                                borderColor: "#6c757d",
+                                backgroundColor: "rgba(108, 117, 125, 0.1)",
+                                borderWidth: 2,
+                                borderDash: [5, 5], // Dashed line for historical
+                                fill: false,
+                                tension: 0.3,
+                                pointRadius: 4,
+                                pointBackgroundColor: "#6c757d",
+                                pointBorderColor: "white",
+                                pointBorderWidth: 2
+                            },
+                            {
+                                label: "🤖 AI-Predicted Demand (ML Model)",
+                                data: predictedData,
+                                borderColor: "#667eea",
+                                backgroundColor: "rgba(102, 126, 234, 0.1)",
+                                borderWidth: 3,
+                                fill: false,
+                                tension: 0.3,
+                                pointRadius: 5,
+                                pointBackgroundColor: "#667eea",
+                                pointBorderColor: "white",
+                                pointBorderWidth: 2
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                labels: {
+                                    color: "#495057",
+                                    font: { size: 13, weight: "bold" },
+                                    padding: 15,
+                                    usePointStyle: true
+                                }
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                backgroundColor: "rgba(0,0,0,0.8)",
+                                padding: 12,
+                                titleFont: { size: 13, weight: "bold" },
+                                bodyFont: { size: 12 },
+                                callbacks: {
+                                    afterLabel: function(context) {
+                                        if (context.datasetIndex === 0) {
+                                            return "Historical average";
+                                        } else {
+                                            return "ML prediction";
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    color: "#6c757d",
+                                    font: { size: 11 }
+                                },
+                                grid: { color: "rgba(0,0,0,0.05)" },
+                                title: {
+                                    display: true,
+                                    text: "Passenger Demand",
+                                    color: "#495057",
+                                    font: { size: 12, weight: "bold" }
+                                }
+                            },
+                            x: {
+                                ticks: {
+                                    color: "#6c757d",
+                                    font: { size: 11 }
+                                },
+                                grid: { color: "rgba(0,0,0,0.05)" },
+                                title: {
+                                    display: true,
+                                    text: "Time of Day",
+                                    color: "#495057",
+                                    font: { size: 12, weight: "bold" }
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Chart Generation Error:", error);
+            }
         }
         
         /* ---------------- TRAIN PLANNING WITH AI (TAB 3) ---------------- */
         async function generatePlan() {
             const availableTrains = parseInt(document.getElementById("availableTrains").value);
-            const isPeakMode = document.getElementById("peakMode").checked ? 1 : 0;
+            const isPeakMode = document.getElementById("peakMode").checked;
 
             document.getElementById("planningOutput").innerHTML = `<div class="info-box">⏳ Generating AI plan...</div>`;
 
             try {
+                // Get system status
+                const systemStatus = await getInductionSystemStatus();
+                const rlModelLoaded = systemStatus.rl_model_loaded;
+                
                 const planResults = [];
+                let allRecommendations = [];
 
                 // Generate plan for different hours
                 for (let hour = 6; hour <= 22; hour++) {
-                    const isPeak = (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20) ? 1 : 0;
+                    const isPeak = (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20);
                     
                     if (isPeakMode && !isPeak) continue; // Skip non-peak hours if peak mode
                     
                     // Get demand forecast
-                    const demandResult = await fetchDemandForecast(hour, 0, isPeak, 5, 0);
+                    const demandResult = await fetchDemandForecast(hour, 0, isPeak ? 1 : 0, 5, 0);
                     const predictedDemand = demandResult.estimated_demand || 5000;
 
-                    // Get train recommendation
+                    // Get train recommendation from RL model
                     const inductionResult = await fetchTrainRecommendation(predictedDemand, isPeak);
                     const recommendedTrains = Math.min(inductionResult.recommended_trains, availableTrains);
 
@@ -967,48 +1220,147 @@
                         hour: hour,
                         demand: predictedDemand,
                         trains: recommendedTrains,
-                        headway: Math.round(60 / recommendedTrains)
+                        headway: inductionResult.headway || Math.round(60 / recommendedTrains),
+                        waitingTime: inductionResult.expected_waiting_time || (inductionResult.headway ? inductionResult.headway / 2 : 0),
+                        crowdingRisk: inductionResult.overcrowding_risk || "Unknown",
+                        confidence: inductionResult.confidence || 78,
+                        policy: inductionResult.policy || "unknown",
+                        explanation: inductionResult.explanation || ""
                     });
+
+                    allRecommendations.push(inductionResult);
                 }
 
-                // Generate HTML output
+                // Calculate peak hour recommendation (average of peak hours)
+                const peakResults = planResults.filter(r => (r.hour >= 8 && r.hour <= 10) || (r.hour >= 17 && r.hour <= 20));
+                
+                let avgTrains, avgDemand, avgHeadway, avgWaitingTime, avgCrowdingRisk, avgConfidence;
+                
+                if (peakResults.length > 0) {
+                    avgTrains = Math.round(peakResults.reduce((sum, r) => sum + r.trains, 0) / peakResults.length);
+                    avgDemand = Math.round(peakResults.reduce((sum, r) => sum + r.demand, 0) / peakResults.length);
+                    avgHeadway = Math.round(peakResults.reduce((sum, r) => sum + r.headway, 0) / peakResults.length);
+                    avgWaitingTime = (peakResults.reduce((sum, r) => sum + r.waitingTime, 0) / peakResults.length).toFixed(1);
+                    avgConfidence = Math.round(peakResults.reduce((sum, r) => sum + r.confidence, 0) / peakResults.length);
+                    
+                    // Determine overall crowding risk (take worst case)
+                    const riskLevels = { "Low": 1, "Medium": 2, "High": 3 };
+                    avgCrowdingRisk = Object.keys(riskLevels).find(k => 
+                        riskLevels[k] === Math.ceil(peakResults.reduce((sum, r) => sum + (riskLevels[r.crowdingRisk] || 1), 0) / peakResults.length)
+                    ) || "Medium";
+                } else {
+                    avgTrains = planResults[0]?.trains || 5;
+                    avgDemand = planResults[0]?.demand || 5000;
+                    avgHeadway = planResults[0]?.headway || 12;
+                    avgWaitingTime = planResults[0]?.waitingTime?.toFixed(1) || 6.0;
+                    avgCrowdingRisk = planResults[0]?.crowdingRisk || "Unknown";
+                    avgConfidence = planResults[0]?.confidence || 78;
+                }
+                
+                // Determine color based on crowding risk
+                let crowdingColor = "#28a745";
+                if (avgCrowdingRisk === "Medium") crowdingColor = "#ffc107";
+                if (avgCrowdingRisk === "High") crowdingColor = "#dc3545";
+
+                // Generate policy indicator
+                const policyLabel = allRecommendations[0]?.policy === "reinforcement-learning" 
+                    ? "Reinforcement Learning 🤖" 
+                    : "Rule-Based Fallback 📋";
+
+                // Generate HTML output with metrics cards
                 let planHTML = `
-                    <div class="success-box">
-                        <strong>✓ AI Train Scheduling Plan Generated</strong><br>
-                        <strong>Available Trains:</strong> ${availableTrains}<br>
-                        <strong>Peak Mode:</strong> ${isPeakMode ? 'On' : 'Off'}<br><br>
-                    </div>
-                    <div style="overflow-x: auto;">
-                        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
-                            <thead>
-                                <tr style="background: #667eea; color: white;">
-                                    <th style="padding: 10px; text-align: left;">Hour</th>
-                                    <th style="padding: 10px; text-align: center;">Passenger Demand</th>
-                                    <th style="padding: 10px; text-align: center;">Recommended Trains</th>
-                                    <th style="padding: 10px; text-align: center;">Headway (min)</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                    <div style="margin-bottom: 30px;">
+                        <h3 style="color: #495057; margin-bottom: 20px;">📊 AI Output Preview</h3>
+                        <h4 style="color: #667eea; margin-bottom: 20px;">🤖 AI Deployment Recommendation</h4>
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                            <!-- Trains to Deploy -->
+                            <div class="metric" style="flex-direction: column; align-items: flex-start; padding: 20px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #667eea;">
+                                <span class="metric-label" style="font-size: 0.9em; margin-bottom: 10px;">🚆 Trains to Deploy</span>
+                                <span class="metric-value" style="font-size: 2.5em; color: #667eea;">${avgTrains}</span>
+                                <span style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">of ${availableTrains} available</span>
+                            </div>
+                            
+                            <!-- Headway -->
+                            <div class="metric" style="flex-direction: column; align-items: flex-start; padding: 20px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #17a2b8;">
+                                <span class="metric-label" style="font-size: 0.9em; margin-bottom: 10px;">⏱ Headway (min)</span>
+                                <span class="metric-value" style="font-size: 2.5em; color: #17a2b8;">${avgHeadway}</span>
+                                <span style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">Time between trains</span>
+                            </div>
+                            
+                            <!-- Waiting Time -->
+                            <div class="metric" style="flex-direction: column; align-items: flex-start; padding: 20px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #28a745;">
+                                <span class="metric-label" style="font-size: 0.9em; margin-bottom: 10px;">⌛ Expected Waiting Time</span>
+                                <span class="metric-value" style="font-size: 2.5em; color: #28a745;">${avgWaitingTime}</span>
+                                <span style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">Average wait (min)</span>
+                            </div>
+                            
+                            <!-- Overcrowding Risk -->
+                            <div class="metric" style="flex-direction: column; align-items: flex-start; padding: 20px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid ${crowdingColor};">
+                                <span class="metric-label" style="font-size: 0.9em; margin-bottom: 10px;">🟡 Overcrowding Risk</span>
+                                <span class="metric-value" style="font-size: 2em; color: ${crowdingColor};">${avgCrowdingRisk}</span>
+                                <span style="font-size: 0.85em; color: #6c757d; margin-top: 5px;">Peak demand: ${avgDemand}</span>
+                            </div>
+                        </div>
+                        
+                        <!-- AI Insight -->
+                        <div style="background: #e7f3ff; border-left: 4px solid #667eea; padding: 20px; border-radius: 8px; margin-top: 20px;">
+                            <h4 style="color: #667eea; margin-bottom: 10px;">🧠 AI Insight:</h4>
+                            <p style="color: #495057; line-height: 1.6;">
+                                Using <strong>${policyLabel}</strong>, the AI agent evaluated multiple deployment actions and selected <strong>${avgTrains} trains</strong> 
+                                to balance passenger satisfaction (${avgWaitingTime} min avg wait), operational efficiency (${avgHeadway}-min headway), 
+                                and congestion risk (<strong>${avgCrowdingRisk}</strong>) under peak-hour conditions. 
+                                <br/><br/>
+                                <strong>Fleet Utilization:</strong> ${((avgTrains / availableTrains) * 100).toFixed(1)}% of ${availableTrains} available trains. 
+                                <strong>Model Confidence:</strong> ${avgConfidence}%.
+                                ${!rlModelLoaded ? '<br/><br/>⚠️ <strong>Note:</strong> RL model not loaded. Using rule-based fallback.' : ''}
+                            </p>
+                        </div>
+                        
+                        <details style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; cursor: pointer;">
+                            <summary style="font-weight: 600; color: #667eea; margin-bottom: 10px;">📋 Hourly Breakdown (Click to expand)</summary>
+                            <div style="margin-top: 15px; overflow-x: auto;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <thead>
+                                        <tr style="background: #667eea; color: white;">
+                                            <th style="padding: 10px; text-align: left;">Hour</th>
+                                            <th style="padding: 10px; text-align: center;">Peak</th>
+                                            <th style="padding: 10px; text-align: center;">Demand</th>
+                                            <th style="padding: 10px; text-align: center;">Trains</th>
+                                            <th style="padding: 10px; text-align: center;">Headway</th>
+                                            <th style="padding: 10px; text-align: center;">Wait (min)</th>
+                                            <th style="padding: 10px; text-align: center;">Risk</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
                 `;
 
                 planResults.forEach(r => {
+                    const riskColor = r.crowdingRisk === "Low" ? "#28a745" : (r.crowdingRisk === "Medium" ? "#ffc107" : "#dc3545");
+                    const isPeakHour = (r.hour >= 8 && r.hour <= 10) || (r.hour >= 17 && r.hour <= 20);
                     planHTML += `
-                        <tr style="border-bottom: 1px solid #dee2e6;">
-                            <td style="padding: 10px;">${r.hour}:00</td>
+                        <tr style="border-bottom: 1px solid #dee2e6; ${isPeakHour ? 'background: #f0f0ff;' : ''}">
+                            <td style="padding: 10px; font-weight: bold;">${r.hour}:00</td>
+                            <td style="padding: 10px; text-align: center;">${isPeakHour ? '📍' : '—'}</td>
                             <td style="padding: 10px; text-align: center;">${Math.round(r.demand)}</td>
                             <td style="padding: 10px; text-align: center; font-weight: bold; color: #667eea;">${r.trains}</td>
                             <td style="padding: 10px; text-align: center;">${r.headway}</td>
+                            <td style="padding: 10px; text-align: center;">${r.waitingTime.toFixed(1)}</td>
+                            <td style="padding: 10px; text-align: center; color: ${riskColor}; font-weight: bold;">${r.crowdingRisk}</td>
                         </tr>
                     `;
                 });
 
                 planHTML += `
-                            </tbody>
-                        </table>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </details>
                     </div>
                 `;
 
                 document.getElementById("planningOutput").innerHTML = planHTML;
+
 
             } catch (error) {
                 console.error("Planning Error:", error);

@@ -1,211 +1,257 @@
-# Quick Start: Running the Integrated Dashboard
+# Quick Start Guide - RL Q-Table Integration
 
-## Prerequisites
+## 🚀 Getting Started (5 Minutes)
+
+### Prerequisites
 - Python 3.8+
-- FastAPI installed (`pip install fastapi`)
-- Uvicorn installed (`pip install uvicorn`)
-- Modern web browser (Chrome, Firefox, Safari, Edge)
+- pip packages: `fastapi`, `uvicorn`, `joblib`, `numpy`
 
----
-
-## Step 1: Start the Backend FastAPI Server
-
+### Step 1: Start Backend API
 ```bash
-cd c:\Users\kaviy\ai-train-induction-planning-and-scheduling
-python -m uvicorn backend.app:app --reload --port 8000
+cd backend
+python start_server.py
 ```
+✅ Backend running on: `http://localhost:8001`
 
-**Expected output:**
-```
-INFO:     Uvicorn running on http://127.0.0.1:8000
-INFO:     Application startup complete
-```
-
-✅ Backend is now running at `http://localhost:8000/api`
-
----
-
-## Step 2: Open the Frontend Dashboard
-
-### Option A: Direct File Open (Easiest)
-1. Navigate to: `Frontend/index.html`
-2. Right-click → "Open with" → Your browser
-3. Dashboard loads at `file:///C:/Users/kaviy/ai-train-induction-planning-and-scheduling/Frontend/index.html`
-
-### Option B: Local Web Server
+### Step 2: Start Frontend Server
 ```bash
-cd Frontend
-python -m http.server 8080
+cd frontend
+python -m http.server 8000 --directory .
 ```
-Then visit: `http://localhost:8080/index.html`
+✅ Frontend running on: `http://localhost:8000`
+
+### Step 3: Open Dashboard
+Open browser: `http://localhost:8000`
+
+### Step 4: Test Train Planning
+1. Go to "🚆 Train Planning" tab
+2. Adjust sliders:
+   - Available Trains: 5-15
+   - Toggle Peak Hour Mode
+3. Click "🤖 Generate AI Plan"
+4. View AI recommendations!
 
 ---
 
-## Step 3: Verify Connection
+## 📊 Understanding the Output
 
-In the dashboard:
-1. Go to **Operations Control** tab
-2. Adjust hour to 9 (peak hour)
-3. Click **Run AI** button
-4. ✅ You should see recommendations with real backend data
+### Metrics Cards
 
-**If you see error messages:**
-- Backend server not running → Start it (Step 1)
-- Wrong API_BASE URL → Check [Frontend/index.html](Frontend/index.html) line ~350
+| Metric | What It Means | Example |
+|--------|---------------|---------|
+| **Trains to Deploy** | How many trains to run | 6 trains (60% of 10 available) |
+| **Headway (min)** | Time between trains | 10 min = 60÷6 |
+| **Expected Wait** | Average passenger wait | 5 min = 10÷2 |
+| **Overcrowding Risk** | Congestion level | Low 🟢 / Medium 🟡 / High 🔴 |
 
----
-
-## What Each Tab Does
-
-### 🚆 Operations Control (Tab 1)
-- **Input:** Hour, Day Type, Current Trains, Direction
-- **Output:** AI recommendations with weather impact
-- **Example:** "At 9 AM on weekday with 5 trains/hour → Recommend 6 trains/hour (headway: 10 min)"
-
-### 📊 Demand Analytics (Tab 2)
-- **Input:** Date, Time range, Day type, Comparison toggle
-- **Output:** Heatmap showing passenger demand across stations and hours
-- **Example:** Peak hours (8-10 AM, 5-8 PM) show red (high demand), off-peak shows green (low demand)
-
-### 🚆 Train Planning (Tab 3)
-- **Input:** Available trains, Peak mode toggle
-- **Output:** Hourly schedule with recommended train counts
-- **Example:** "6 AM: 2 trains, 9 AM: 8 trains, 5 PM: 8 trains"
-
-### 🔮 Scenario Simulator (Tab 4)
-- **Input:** Demand increase %, unavailable trains, weather/festival events
-- **Output:** Feasibility assessment and impact metrics
-- **Example:** "Festival scenario: Need 10 trains but only 8 available → Capacity Exceeded"
+### AI Insight Box
+- **Policy Used**: "Reinforcement Learning 🤖" or "Rule-Based 📋"
+- **Confidence**: Model certainty (92% = RL, 78% = Fallback)
+- **Fleet Utilization**: % of available trains used
+- **Model Status**: Warning if Q-table not loaded
 
 ---
 
-## Data Flow Diagram
+## 🔧 API Endpoints
 
+### Quick Test Commands
+
+**Get Recommendation:**
+```bash
+curl -X POST http://localhost:8001/api/induction/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"predicted_demand": 5000, "is_peak_hour": 1}'
 ```
-Frontend Dashboard (index.html)
-    ↓
-[User Input: hour, demand %, trains, etc.]
-    ↓
-JavaScript Functions
-    ↓
-Fetch API Calls (HTTP POST)
-    ↓
-FastAPI Backend (port 8000)
-    ├─ /api/demand/forecast → ML demand prediction model
-    ├─ /api/induction/recommend → RL-based train scheduling
-    └─ /api/stations → Station metadata
-    ↓
-[Process with ML/RL Models]
-    ↓
-Return JSON Response
-    ↓
-Frontend Updates Charts/Tables/Alerts
-    ↓
-Display Results to User
+
+**Check System Status:**
+```bash
+curl http://localhost:8001/api/induction/status
+```
+
+**API Documentation:**
+```
+http://localhost:8001/docs
 ```
 
 ---
 
-## API Endpoints Summary
+## ⚙️ Configuration
 
-| Endpoint | Method | Purpose | Used By |
-|----------|--------|---------|---------|
-| `/api/demand/forecast` | POST | Predict passenger demand | All tabs |
-| `/api/induction/recommend` | POST | Recommend trains via RL | Tabs 1, 3, 4 |
-| `/api/stations` | GET | Get station metadata | Tab 2 (heatmap) |
-| `/` | GET | Health check | Dashboard init |
+### Demand Levels
+- **Low**: < 3,000 passengers/hour
+- **Medium**: 3,000 - 6,000 passengers/hour
+- **High**: > 6,000 passengers/hour
 
----
+### Train Deployment Range
+- **Min**: 2 trains
+- **Max**: 10 trains
+- **Q-Table States**: 6 (3 demand levels × 2 peak/off-peak)
 
-## Troubleshooting
-
-### Issue: "Backend service unavailable" error
-**Solution:**
-1. Check if backend is running: `http://localhost:8000/` in browser
-2. If not, run: `python -m uvicorn backend.app:app --reload --port 8000`
-3. Refresh dashboard
-
-### Issue: CORS error in browser console
-**Solution:**
-- Backend CORS is already configured in [backend/app.py](backend/app.py)
-- If still getting errors, allow all origins (development only):
-  ```python
-  app.add_middleware(
-      CORSMiddleware,
-      allow_origins=["*"],  # ← Already set
-  )
-  ```
-
-### Issue: Weather data not showing
-**Solution:**
-- External weather API is optional
-- Dashboard uses fallback values (28°C, 0mm rain)
-- To use real weather, add `WEATHER_API_KEY` to `.env` file
-
-### Issue: Charts not rendering
-**Solution:**
-- Clear browser cache: `Ctrl+Shift+Delete`
-- Check if Chart.js loaded: Search for "Chart.js" in [Frontend/index.html](Frontend/index.html)
-- Verify JavaScript has no errors: Press `F12` → Console tab
+### Peak Hours
+- **Morning Peak**: 8:00 AM - 10:00 AM
+- **Evening Peak**: 5:00 PM - 8:00 PM
+- **Off-Peak**: All other hours
 
 ---
 
-## File Structure for Reference
+## 🎯 How RL Works
 
 ```
-ai-train-induction-planning-and-scheduling/
-├── Frontend/
-│   └── index.html                    ← Main dashboard (UPDATED ✅)
-├── backend/
-│   ├── app.py                        ← FastAPI server
-│   ├── api/
-│   │   ├── demand_api.py            ← Demand forecasting
-│   │   ├── induction_api.py         ← Train scheduling (RL)
-│   │   └── stations_api.py          ← Station metadata
-│   └── utils/
-│       └── surge_detection.py       ← Surge detection logic
-├── model/
-│   ├── demand_forecast_model.pkl    ← ML model (required)
-│   ├── model_features.pkl           ← Model features (required)
-│   └── rl_q_table.pkl              ← RL Q-table (optional)
-├── notebook/
-│   ├── data-preprocessing.ipynb
-│   ├── demand-forecasting.ipynb
-│   └── rl_train_induction.ipynb
-├── data/
-│   ├── raw/                         ← GTFS data
-│   └── processed/                   ← Processed data
-└── Control_Dashboard.py             ← Streamlit dashboard (alternative)
+┌─────────────────────────────────────┐
+│  User Inputs (Demand, Peak Mode)    │
+└──────────────┬──────────────────────┘
+               │
+               ↓
+┌─────────────────────────────────────┐
+│  Discretize State                   │
+│  (demand_level, is_peak_hour)       │
+└──────────────┬──────────────────────┘
+               │
+               ↓
+┌─────────────────────────────────────┐
+│  Query Q-Table                      │
+│  Get Q-values for all actions       │
+└──────────────┬──────────────────────┘
+               │
+               ↓
+┌─────────────────────────────────────┐
+│  Select Best Action                 │
+│  argmax(Q-values)                   │
+└──────────────┬──────────────────────┘
+               │
+               ↓
+┌─────────────────────────────────────┐
+│  Return Recommendation              │
+│  (trains, headway, wait, risk)      │
+└─────────────────────────────────────┘
 ```
 
 ---
 
-## Performance Tips
+## 🐛 Troubleshooting
 
-1. **Heatmap generation is slow:** Reduce time range (e.g., 6-12 instead of 6-22)
-2. **Multiple requests:** Dashboard batches them; wait for "⏳ Processing..." to complete
-3. **Large dataset queries:** Use Demand Analytics with filters (weekday/weekend, time range)
+| Issue | Solution |
+|-------|----------|
+| **Can't connect to API** | Check backend is running on port 8001 |
+| **Getting rule-based fallback** | Q-table file not found. Train model or check `model/rl_q_table.pkl` |
+| **Slow response** | Multiple forecasting API calls. Check demand API connectivity |
+| **Port already in use** | Change port in `start_server.py` or stop other services |
+
+### Debug Steps
+```bash
+# 1. Check if backend is running
+curl http://localhost:8001/
+
+# 2. Check RL model status
+curl http://localhost:8001/api/induction/status
+
+# 3. Test with simple request
+curl -X POST http://localhost:8001/api/induction/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"predicted_demand": 3000, "is_peak_hour": 0}'
+
+# 4. Check browser console (F12) for frontend errors
+```
 
 ---
 
-## Next Steps
+## 📈 Understanding Q-Values
 
-1. ✅ **Verify integration:** Run dashboard and check all tabs
-2. ✅ **Test scenario:** Try different demand increases and observe impact
-3. ✅ **Review KPIs:** Check waiting time, load, and crowding metrics
-4. 📝 **Customize thresholds:** Edit peak hour ranges, surge thresholds in code
-5. 🚀 **Deploy:** Copy to web server for team access
+Q-Values represent learned value of each action in a state.
+
+**Example Response:**
+```json
+"q_values": {
+  "2": 0.234,    // Low value - rarely chosen
+  "3": 0.512,    // Medium
+  "4": 0.789,    // Good
+  "5": 0.923,    // Very good
+  "6": 0.956,    // BEST ← Selected
+  "7": 0.834,    // Good but overdeploying
+  "8": 0.612,    // Medium
+  "9": 0.445,    // Low
+  "10": 0.123    // Very low - wastes resources
+}
+```
+
+**Why 6 trains?** Highest Q-value = Best learned strategy!
 
 ---
 
-## Support Resources
+## 📊 Hourly Breakdown Table
 
-- **FastAPI Docs:** http://localhost:8000/docs (auto-generated when backend runs)
-- **Backend Integration Guide:** [FRONTEND_INTEGRATION_GUIDE.md](FRONTEND_INTEGRATION_GUIDE.md)
-- **Model Training:** See [notebook/demand-forecasting.ipynb](notebook/demand-forecasting.ipynb)
-- **RL Training:** See [notebook/rl_train_induction.ipynb](notebook/rl_train_induction.ipynb)
+Shows recommendation for each hour:
+
+| Hour | Peak | Demand | Trains | Headway | Wait | Risk |
+|------|:----:|--------|--------|---------|------|------|
+| 6:00 | — | 1,200 | 2 | 30.0 | 15.0 | Low |
+| 8:00 | 📍 | 6,500 | 8 | 7.5 | 3.8 | High |
+| 10:00| 📍 | 5,200 | 6 | 10.0 | 5.0 | Medium |
+| 17:00| 📍 | 7,100 | 8 | 7.5 | 3.8 | High |
+| 22:00| — | 2,100 | 2 | 30.0 | 15.0 | Low |
+
+- **📍** = Peak hour
+- **Trains** = AI recommendation
+- **Headway** = Time between trains
+- **Wait** = Expected passenger wait time
+- **Risk** = Overcrowding risk level
 
 ---
 
-**Status:** ✅ Ready to use
-**Last Updated:** January 23, 2026
+## 💡 Tips & Best Practices
+
+### Interpreting Recommendations
+✅ **Balanced**: Trains 5-7, Medium-High demand = Good training data
+⚠️ **Edge Case**: Trains 2 (min), High demand = Risk assessment working
+🔄 **Off-Peak**: Trains 2-3, Low demand = Cost optimization
+
+### Testing the System
+1. **Test Low Demand**: Set available trains = 5, demand < 3000
+   - Should recommend minimal trains
+   - Headway will be long
+   - Risk should be "Low"
+
+2. **Test Peak Hour**: Set available trains = 10, demand > 6000
+   - Should recommend more trains
+   - Headway will be short
+   - Risk management active
+
+3. **Test Fleet Constraints**: Set available trains = 3
+   - Recommendations capped at 3
+   - Utilization shows 100%
+
+---
+
+## 📚 More Information
+
+- **Full Technical Docs**: See `RL_INTEGRATION.md`
+- **Implementation Details**: See `IMPLEMENTATION_SUMMARY.md`
+- **Training Notebook**: See `notebook/rl_train_induction.ipynb`
+- **API Docs**: Visit `http://localhost:8001/docs` (when running)
+
+---
+
+## ✨ What's New
+
+✅ **Backend Enhancements**
+- 3 new API endpoints
+- Full operational metrics
+- Q-value transparency
+- System status monitoring
+
+✅ **Frontend Updates**
+- Real-time RL model detection
+- Enhanced metrics display
+- Fleet utilization tracking
+- Detailed hourly breakdown
+
+✅ **Integration Features**
+- Seamless RL model integration
+- Fallback policy support
+- Comprehensive error handling
+- Model confidence reporting
+
+---
+
+**🎉 Enjoy your AI-powered train scheduling system!**
+
